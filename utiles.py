@@ -2,7 +2,7 @@ import math
 import numpy as np
 
 import cv2
-
+import torch.nn.functional as F
 from scipy import ndimage
 
 
@@ -88,7 +88,8 @@ def ssim_3d(img1, img2, data_range=255):
     img2 = img2.astype(np.float64)
 
     # 生成一维高斯核
-    kernel_1d = cv2.getGaussianKernel(11, 1.5).ravel()
+    # kernel_1d = cv2.getGaussianKernel(11, 1.5).ravel()
+    kernel_1d = cv2.getGaussianKernel(11, 0.25).ravel()
 
     # 可分离的三维高斯卷积
     def convolve_gaussian_3d(image):
@@ -103,51 +104,58 @@ def ssim_3d(img1, img2, data_range=255):
     mu2 = convolve_gaussian_3d(img2)
 
     # 裁剪有效区域
-    mu1 = mu1[...,5:-5, 5:-5, 5:-5]
-    mu2 = mu2[...,5:-5, 5:-5, 5:-5]
+    mu1 = mu1[..., 5:-5, 5:-5, 5:-5]
+    mu2 = mu2[..., 5:-5, 5:-5, 5:-5]
 
     mu1_sq = mu1 ** 2
     mu2_sq = mu2 ** 2
     mu1_mu2 = mu1 * mu2
 
     # 计算方差和协方差
-    sigma1_sq = convolve_gaussian_3d(img1 ** 2)[...,5:-5, 5:-5, 5:-5] - mu1_sq
-    sigma2_sq = convolve_gaussian_3d(img2 ** 2)[...,5:-5, 5:-5, 5:-5] - mu2_sq
-    sigma12 = convolve_gaussian_3d(img1 * img2)[...,5:-5, 5:-5, 5:-5] - mu1_mu2
+    sigma1_sq = convolve_gaussian_3d(img1 ** 2)[..., 5:-5, 5:-5, 5:-5] - mu1_sq
+    sigma2_sq = convolve_gaussian_3d(img2 ** 2)[..., 5:-5, 5:-5, 5:-5] - mu2_sq
+    sigma12 = convolve_gaussian_3d(img1 * img2)[..., 5:-5, 5:-5, 5:-5] - mu1_mu2
 
+    sigma1_sq = np.maximum(sigma1_sq, 0)
+    sigma2_sq = np.maximum(sigma2_sq, 0)
     # 计算SSIM映射
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2) + 1e-8)
+    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+                (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2) + 1e-8)
     return ssim_map.mean()
 
 
-def calculate_psnr_3d(img1, img2, border=0):
-    # img1 and img2 have range [0, 255]
-    # img1 = img1.squeeze()
-    # img2 = img2.squeeze()
-
+def calculate_psnr_3d(img1, img2, border=0, max_value=255.0):
     if not img1.shape == img2.shape:
         raise ValueError('Input images must have the same dimensions.')
 
-    # 创建适用于任意维度的切片对象
-    slices = tuple(slice(border, dim - border) for dim in img1.shape)
-    img1 = img1[slices]
-    img2 = img2[slices]
+    # 检查border有效性
+    for dim in img1.shape:
+        if dim < 2 * border:
+            raise ValueError(f"Border {border} is too large for dimension size {dim}.")
 
-    img1 = img1.astype(np.float64)
-    img2 = img2.astype(np.float64)
-    mse = np.mean((img1 - img2) ** 2)
+    # 切片处理
+    slices = tuple(slice(border, dim - border) for dim in img1.shape[-3:])
+    img1 = img1[...,slices[0],slices[1],slices[2]]
+    img2 = img2[...,slices[0],slices[1],slices[2]]
+
+
+    # 计算MSE
+    mse = torch.mean((img1 - img2) ** 2)
 
     if mse == 0:
         return float('inf')
 
-    return 20 * math.log10(255.0 / math.sqrt(mse))
+    # 使用max_value替代固定值255
+    return 10 * math.log10(max_value ** 2 / mse)
+
 
 
 if __name__ == '__main__':
     import torch
 
-    x1 = torch.rand(8, 1, 64, 64, 16).numpy()
-    x2 = torch.rand(8, 1, 64, 64, 16).numpy()
-    ssim = ssim_3d(x1, x2,1)
-    psnr = calculate_psnr_3d(x1, x2)
-    print(ssim, psnr)
+    x2 = torch.rand(1,1,64, 64, 64)
+    x1 = torch.rand(1,1,64, 64, 64)
+    # x2 = x1.copy()
+    # ssim = _ssim_3D(x1, x2, 1)
+    psnr = calculate_psnr_3d(x1, x2,1)
+    print( psnr)
